@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile for Guardian Backend Service
 # Stage 1: Build stage for Rust backend (if exists) or Node.js API
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache \
@@ -36,7 +36,7 @@ WORKDIR /app/guardian-api
 RUN if [ -f "tsconfig.json" ]; then npm run build; fi
 
 # Stage 2: Production stage
-FROM node:20-alpine AS production
+FROM node:24-alpine AS production
 
 # Install runtime dependencies and security tools
 RUN apk add --no-cache \
