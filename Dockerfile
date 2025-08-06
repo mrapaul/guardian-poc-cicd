@@ -1,5 +1,5 @@
 # Simple unified Dockerfile for Guardian Platform PoC
-FROM node:20-alpine
+FROM node:24-alpine
 
 # Install dependencies
 RUN apk add --no-cache \

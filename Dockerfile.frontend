@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile for Guardian Frontend Service
 # Stage 1: Dependencies
-FROM node:20-alpine AS deps
+FROM node:24-alpine AS deps
 
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
@@ -12,7 +12,7 @@ COPY guardian-dashboard/package*.json ./
 RUN npm ci
 
 # Stage 2: Builder
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 
 WORKDIR /app
 
@@ -40,7 +40,7 @@ RUN npm run build || \
     echo "Build completed"
 
 # Stage 3: Production
-FROM node:20-alpine AS production
+FROM node:24-alpine AS production
 
 # Install security updates
 RUN apk add --no-cache \
