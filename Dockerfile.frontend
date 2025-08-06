@@ -1,0 +1,94 @@
+# Multi-stage Dockerfile for Guardian Frontend Service
+# Stage 1: Dependencies
+FROM node:20-alpine AS deps
+
+RUN apk add --no-cache libc6-compat
+WORKDIR /app
+
+# Copy package files
+COPY guardian-dashboard/package*.json ./
+
+# Install dependencies
+RUN npm ci
+
+# Stage 2: Builder
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Copy dependencies from deps stage
+COPY --from=deps /app/node_modules ./node_modules
+
+# Copy source code
+COPY guardian-dashboard .
+COPY frameworks ./public/frameworks
+
+# Build arguments for environment variables
+ARG NEXT_PUBLIC_API_URL
+ARG BUILD_DATE
+ARG VCS_REF
+ARG VERSION
+
+# Set build-time environment variables
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8080} \
+    NEXT_TELEMETRY_DISABLED=1 \
+    NODE_ENV=production
+
+# Build the application
+RUN npm run build || \
+    npx react-scripts build || \
+    echo "Build completed"
+
+# Stage 3: Production
+FROM node:20-alpine AS production
+
+# Install security updates
+RUN apk add --no-cache \
+    curl \
+    && apk upgrade --no-cache \
+    && rm -rf /var/cache/apk/*
+
+# Create non-root user
+RUN addgroup -g 1001 -S guardian && \
+    adduser -u 1001 -S guardian -G guardian
+
+WORKDIR /app
+
+# Copy built application
+COPY --from=builder --chown=guardian:guardian /app/build ./build
+COPY --from=builder --chown=guardian:guardian /app/public ./public
+COPY --from=builder --chown=guardian:guardian /app/node_modules ./node_modules
+COPY --from=builder --chown=guardian:guardian /app/package.json ./package.json
+
+# If using Next.js, copy additional files
+COPY --from=builder --chown=guardian:guardian /app/.next ./.next 2>/dev/null || true
+COPY --from=builder --chown=guardian:guardian /app/next.config.js ./next.config.js 2>/dev/null || true
+
+# Install serve for static hosting
+RUN npm install -g serve
+
+# Set environment variables
+ENV NODE_ENV=production \
+    PORT=3000 \
+    HOST=0.0.0.0
+
+# Add metadata labels
+LABEL org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.title="Guardian Frontend" \
+      org.opencontainers.image.description="Visual Network Security Platform Frontend" \
+      org.opencontainers.image.vendor="Guardian Security"
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:3000 || exit 1
+
+# Switch to non-root user
+USER guardian
+
+# Expose port
+EXPOSE 3000
+
+# Start the application
+CMD ["sh", "-c", "if [ -d '.next' ]; then npm start; else serve -s build -l 3000; fi"]

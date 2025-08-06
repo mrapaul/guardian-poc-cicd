@@ -1,0 +1,79 @@
+# Multi-stage Dockerfile for Guardian Backend Service
+# Stage 1: Build stage for Rust backend (if exists) or Node.js API
+FROM node:20-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    curl \
+    git
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY guardian-api/package*.json ./guardian-api/
+COPY guardian-scanner/package*.json ./guardian-scanner/
+
+# Install dependencies
+WORKDIR /app/guardian-api
+RUN npm ci --only=production
+
+WORKDIR /app/guardian-scanner
+RUN npm ci --only=production
+
+# Copy source code
+WORKDIR /app
+COPY guardian-api ./guardian-api
+COPY guardian-scanner ./guardian-scanner
+COPY frameworks ./frameworks
+COPY policies ./policies
+
+# Build if necessary (TypeScript compilation, etc.)
+WORKDIR /app/guardian-api
+RUN if [ -f "tsconfig.json" ]; then npm run build; fi
+
+# Stage 2: Production stage
+FROM node:20-alpine AS production
+
+# Install runtime dependencies and security tools
+RUN apk add --no-cache \
+    curl \
+    nmap \
+    nmap-scripts \
+    nuclei \
+    && rm -rf /var/cache/apk/*
+
+# Create non-root user
+RUN addgroup -g 1001 -S guardian && \
+    adduser -u 1001 -S guardian -G guardian
+
+# Set working directory
+WORKDIR /app
+
+# Copy built application from builder stage
+COPY --from=builder --chown=guardian:guardian /app/guardian-api ./guardian-api
+COPY --from=builder --chown=guardian:guardian /app/guardian-scanner ./guardian-scanner
+COPY --from=builder --chown=guardian:guardian /app/frameworks ./frameworks
+COPY --from=builder --chown=guardian:guardian /app/policies ./policies
+
+# Set environment variables
+ENV NODE_ENV=production \
+    PORT=8080 \
+    HOST=0.0.0.0
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Switch to non-root user
+USER guardian
+
+# Expose port
+EXPOSE 8080
+
+# Start the application
+WORKDIR /app/guardian-api
+CMD ["node", "server.js"]

@@ -1,0 +1,5 @@
+# DigitalOcean Configuration
+do_token     = "dop_v1_YOUR_DIGITALOCEAN_API_TOKEN"
+region       = "nyc3"
+environment  = "production"
+project_name = "guardian-security"

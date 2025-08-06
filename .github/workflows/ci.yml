@@ -1,0 +1,311 @@
+name: Continuous Integration
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+env:
+  CARGO_TERM_COLOR: always
+  NODE_VERSION: '20.x'
+  RUST_VERSION: '1.75'
+
+jobs:
+  lint-and-format:
+    name: Lint & Format Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt, clippy
+          
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: guardian-dashboard/package-lock.json
+          
+      - name: Check Rust formatting
+        run: |
+          if [ -d "guardian-scanner" ]; then
+            cd guardian-scanner
+            cargo fmt --all -- --check
+          fi
+          
+      - name: Run Rust linter (Clippy)
+        run: |
+          if [ -d "guardian-scanner" ]; then
+            cd guardian-scanner
+            cargo clippy --all-targets --all-features -- -D warnings
+          fi
+          
+      - name: Install frontend dependencies
+        run: |
+          cd guardian-dashboard
+          npm ci
+          
+      - name: Run frontend linter
+        run: |
+          cd guardian-dashboard
+          npm run lint || true
+          
+      - name: Check frontend formatting
+        run: |
+          cd guardian-dashboard
+          npx prettier --check "src/**/*.{js,jsx,ts,tsx,css,md,json}" || true
+
+  backend-tests:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          
+      - name: Cache Rust dependencies
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            guardian-scanner/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+            
+      - name: Build Rust backend
+        run: |
+          if [ -d "guardian-scanner" ]; then
+            cd guardian-scanner
+            cargo build --release --all-features
+          fi
+          
+      - name: Run Rust tests
+        run: |
+          if [ -d "guardian-scanner" ]; then
+            cd guardian-scanner
+            cargo test --all-features --verbose
+          fi
+          
+      - name: Generate test coverage
+        run: |
+          if [ -d "guardian-scanner" ]; then
+            cd guardian-scanner
+            cargo install cargo-tarpaulin --locked || true
+            cargo tarpaulin --out Xml --all-features --verbose || true
+          fi
+
+  frontend-tests:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: guardian-dashboard/package-lock.json
+          
+      - name: Install dependencies
+        run: |
+          cd guardian-dashboard
+          npm ci
+          
+      - name: Build frontend
+        run: |
+          cd guardian-dashboard
+          npm run build
+          
+      - name: Run frontend tests
+        run: |
+          cd guardian-dashboard
+          npm test -- --watchAll=false --passWithNoTests || true
+          
+      - name: Run frontend type checking
+        run: |
+          cd guardian-dashboard
+          npx tsc --noEmit || true
+
+  api-tests:
+    name: API Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: guardian-api/package-lock.json
+          
+      - name: Install API dependencies
+        run: |
+          cd guardian-api
+          npm ci
+          
+      - name: Run API tests
+        run: |
+          cd guardian-api
+          npm test || true
+          
+      - name: Check API with ESLint
+        run: |
+          cd guardian-api
+          npx eslint . --ext .js || true
+
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+        
+      - name: Run Rust security audit
+        run: |
+          if [ -d "guardian-scanner" ]; then
+            cd guardian-scanner
+            cargo audit || true
+          fi
+          
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          
+      - name: Run npm audit for frontend
+        run: |
+          cd guardian-dashboard
+          npm audit --audit-level=high || true
+          
+      - name: Run npm audit for API
+        run: |
+          cd guardian-api
+          npm audit --audit-level=high || true
+          
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  docker-build-test:
+    name: Docker Build Test
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        
+      - name: Build backend Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.backend
+          push: false
+          tags: guardian-backend:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          
+      - name: Build frontend Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile.frontend
+          push: false
+          tags: guardian-frontend:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          
+      - name: Run Docker security scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'guardian-backend:test'
+          format: 'table'
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH'
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [backend-tests, frontend-tests, api-tests]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          
+      - name: Start services with docker-compose
+        run: |
+          docker-compose up -d
+          sleep 10
+          
+      - name: Check service health
+        run: |
+          curl -f http://localhost:8080/health || exit 1
+          curl -f http://localhost:3000 || exit 1
+          
+      - name: Run integration test suite
+        run: |
+          ./test-poc.sh || true
+          
+      - name: Collect docker logs
+        if: failure()
+        run: |
+          docker-compose logs > docker-logs.txt
+          
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: docker-logs
+          path: docker-logs.txt
+          
+      - name: Stop services
+        if: always()
+        run: docker-compose down

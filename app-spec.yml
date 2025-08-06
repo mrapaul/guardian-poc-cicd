@@ -1,0 +1,213 @@
+name: guardian-platform
+region: nyc3
+
+# Alert policies
+alerts:
+  - rule: DEPLOYMENT_FAILED
+  - rule: DOMAIN_FAILED
+
+# Services configuration
+services:
+  # Backend API Service (Internal only, no public ingress)
+  - name: backend-service
+    image:
+      registry_type: DOCR
+      registry: guardian-security
+      repository: guardian-backend
+      tag: BACKEND_TAG
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    internal_ports:
+      - 8080
+    health_check:
+      http_path: /health
+      initial_delay_seconds: 10
+      period_seconds: 30
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 3
+    envs:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "8080"
+      - key: DATABASE_URL
+        type: SECRET
+        value: DATABASE_URL
+      - key: JWT_SECRET
+        type: SECRET
+        value: JWT_SECRET
+      - key: ENCRYPTION_KEY
+        type: SECRET
+        value: ENCRYPTION_KEY
+      - key: LOG_LEVEL
+        value: info
+      - key: CORS_ORIGIN
+        value: "${APP_URL}"
+    
+  # API Service (Internal only, no public ingress)
+  - name: api-service
+    image:
+      registry_type: DOCR
+      registry: guardian-security
+      repository: guardian-api
+      tag: API_TAG
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    internal_ports:
+      - 8080
+    health_check:
+      http_path: /health
+      initial_delay_seconds: 10
+      period_seconds: 30
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 3
+    envs:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "8080"
+      - key: DATABASE_URL
+        type: SECRET
+        value: DATABASE_URL
+      - key: SCANNER_SERVICE_URL
+        value: "http://backend-service:8080"
+      - key: LOG_LEVEL
+        value: info
+      - key: CORS_ORIGIN
+        value: "${APP_URL}"
+
+  # Frontend Service (Public facing)
+  - name: frontend-service
+    image:
+      registry_type: DOCR
+      registry: guardian-security
+      repository: guardian-frontend
+      tag: FRONTEND_TAG
+    instance_count: 2
+    instance_size_slug: basic-xxs
+    http_port: 3000
+    routes:
+      - path: /
+        preserve_path_prefix: true
+    health_check:
+      http_path: /
+      initial_delay_seconds: 10
+      period_seconds: 30
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 3
+    envs:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      - key: NEXT_PUBLIC_API_URL
+        value: "http://api-service:8080"
+      - key: REACT_APP_API_URL
+        value: "http://api-service:8080"
+    cors:
+      allow_origins:
+        - prefix: https://
+      allow_methods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+      allow_headers:
+        - Content-Type
+        - Authorization
+      allow_credentials: true
+
+# Database configuration (managed PostgreSQL)
+databases:
+  - name: guardian-db
+    engine: PG
+    version: "15"
+    size: db-s-1vcpu-1gb
+    num_nodes: 1
+    production: true
+
+# Job for database migrations
+jobs:
+  - name: db-migrate
+    kind: PRE_DEPLOY
+    image:
+      registry_type: DOCR
+      registry: guardian-security
+      repository: guardian-backend
+      tag: BACKEND_TAG
+    run_command: |
+      cd /app/guardian-api
+      npm run migrate || echo "No migrations to run"
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    envs:
+      - key: DATABASE_URL
+        type: SECRET
+        value: DATABASE_URL
+
+# Worker for background tasks
+workers:
+  - name: scanner-worker
+    image:
+      registry_type: DOCR
+      registry: guardian-security
+      repository: guardian-backend
+      tag: BACKEND_TAG
+    run_command: node /app/guardian-scanner/worker.js
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    envs:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        type: SECRET
+        value: DATABASE_URL
+      - key: REDIS_URL
+        type: SECRET
+        value: REDIS_URL
+      - key: SCANNER_QUEUE
+        value: scan-tasks
+      - key: LOG_LEVEL
+        value: info
+
+# Static site configuration (if needed)
+static_sites: []
+
+# Ingress rules
+ingress:
+  rules:
+    - component:
+        name: frontend-service
+      match:
+        path:
+          prefix: /
+      cors:
+        allow_origins:
+          - prefix: https://
+        allow_methods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        allow_headers:
+          - Content-Type
+          - Authorization
+        allow_credentials: true
+
+# Environment variables shared across all components
+envs:
+  - key: APP_ENV
+    value: production
+  - key: APP_NAME
+    value: "Guardian Security Platform"
+  - key: TZ
+    value: "UTC"
+
+# Features
+features:
+  - buildpack-stack=ubuntu-22
