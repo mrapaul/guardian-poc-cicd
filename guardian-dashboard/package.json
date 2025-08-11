@@ -10,7 +10,7 @@
     "recharts": "^2.10.3",
     "axios": "^1.6.2",
     "react-flow-renderer": "^10.3.17",
-    "@mui/material": "^5.14.20",
+    "@mui/material": "^7.3.1",
     "@emotion/react": "^11.11.1",
     "@emotion/styled": "^11.11.0",
     "@mui/icons-material": "^5.14.19",
